@@ -1,0 +1,1 @@
+All data is shared under the terms of a Creative Commons license (CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/). All EEG data was downloaded from the openly available ERP CORE repository (Kappenman ES, Farrens JL, Zhang W, Stewart AX, Luck SJ (2021) ERP CORE: An open resource for human event-related potential research. NeuroImage 225:117465.)
