@@ -1,0 +1,384 @@
+---
+title: "README"
+author: "Meta"
+date: "08-08-2025"
+output:
+  html_document: # try pdf_document or odt_document (txt) or md_document
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    df_print: kable # try tibble
+    citation_package: natbib
+fontsize: 12pt
+mainfont: calibri
+---
+```{r setup, include=FALSE}
+library(rmarkdown)
+library(R.matlab)   
+```
+
+# Change Point Detection for Individual Onset Estimation
+
+This README gives an overview of all scripts involved in the project 'ERP_onset_detection'. This includes pre-processing raw EEG data from the open access ERP CORE repository, analysis in MATLAB, further analysis and processing of results in R.
+
+## Data Source
+
+Data was download from: "Raw data and analysis scripts" files from the the Open Science Foundation repository, at https://osf.io/thsqg/
+
+All credit for the data goes to Kappenman, E., Farrens, J., Zhang, W., Stewart, A. X., & Luck, S. J. (2020). ERP CORE: An Open Resource for Human Event-Related Potential Research [Preprint]. PsyArXiv. https://doi.org/10.31234/osf.io/4azqm
+
+All data is shared under the terms of a Creative Commons license (CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/).
+
+# MATLAB
+
+## Raw ERP CORE data preprocessing
+### Overview for EEG pre-processing steps in MATLAB
+
+- **Script name:** `Preprocessing_ERP_Core.m`
+- **Purpose:** Preprocess raw EEG data using EEGLAB in MATLAB
+- **Input:** ERP Core folder "Raw data and analysis scripts" containing EEG data files, event markers, and parameters for artifact rejection in Excel files
+- **Dependencies:** 
+  - EEGLAB Toolbox Version  2024.2.1 
+- **Output:** Cleaned and epoched datasets, one for each subject and component, saved in a new folder with the suffix "_prepro.set"
+- **Credit:** Kappenman, E., Farrens, J., Zhang, W., Stewart, A. X., & Luck, S. J. (2020). ERP CORE: An Open Resource for Human Event-Related Potential Research [Preprint]. PsyArXiv. https://doi.org/10.31234/osf.io/4azqm
+
+
+### Pre-processing steps already performed on input data files:
+
+1. Shift stimulus event codes later in time by 26 ms due to monitor delay (not for the MMN component)
+2. Down-sample from 1024 Hz to 256 Hz
+3. Re-reference the data to average of P9 and P10 (not for the N170 component, here the data is re-reference to the average of all 33 EEG sites)
+4. Create a bipolar HEOG channel and VEOG channel for artifact rejection
+5. Add channel location information corresponding to 10/10 system
+6. Remove DC offsets
+7. Apply high-pass filter (non-casual Butterworth impulse response function, half-amplitude cut-off at 0.1 Hz, 12 dB/oct roll-off)
+8. Remove segments of EEG during break periods
+9. Delete noisy EEG segments within trial blocks that exceed the threshold defined in "ICA_Prep_Values_%c.xlsx"
+10. Compute ICA weights with binICA and transfer to the continuous EEG data file
+
+### Pre-processing steps already performed on input data files:
+
+1. Load continuous EEG data files with suffix "%d_%s_shifted_ds_reref_ucbip_hpfilt_ica_weighted.set" (%d for each subject ID and %s for each ERP Component)
+
+2. Ocular Artifact Correction by removing ICA components specified in "ICA_Components_%c.xlsx"
+
+3. Create bipolar HEOG channel and bipolar VEOG channel
+
+4. Create EEG Event List with event codes and their timing store in "%s_Eventlist.txt"
+
+5. Assign events to bins with Binlister, excluding trials where the appropriate behavioral response did not occur in the specified reaction time window (after stimulus onset). Bin assignment is saved in "%s_Eventlist_Bins.txt".
+
+| Component | Reaction Time Window (ms)|
+|-----------|--------------------------|
+| N170      | 200–1000           |
+| MMN       | no trials excluded |
+| N2pc      | 200–1000           |
+| N400      | 200–1500           |
+| P3        | 200–1000           |
+| LRP       | 200–1000           |
+| ERN       | 200–1000           |
+
+6. Epoch EEG into 1-second segments time-locked to the response:
+
+| Component | Epoch Segment (ms) |
+|-----------|--------------------|
+| N170      | -200 to 800        |
+| MMN       | -200 to 800        |
+| N2pc      | -200 to 800        |
+| N400      | -200 to 800        |
+| P3        | -200 to 800        |
+| LRP       | -800 to 200        |
+| ERN       | -600 to 400        |
+
+7. Perform baseline correction using average voltage of period:
+
+| Component | Baseline period (ms) |
+|-----------|-----------------------|
+| N170      | -200 to 0             |
+| MMN       | -200 to 0             |
+| N2pc      | -200 to 0             |
+| N400      | -200 to 0             |
+| P3        | -200 to 0             |
+| LRP       | -800 to 600           |
+| ERN       | -400 to -200          |
+
+8. Interpolate channels specified in "Interpolate_Channels_%s.xlsx"
+
+9. Identify segments of EEG with Commonly Recorded Artifactual Potentials (C.R.A.P.) using parameters from "AR_Parameters_for_SVT_CRAP_%s.xlsx" (performed on an all channels except for the bipolar HEOG and VEOG)
+
+10. Identify segments with C.R.A.P using parameters from "AR_Parameters_for_MW_CRAP_%s.xlsx"
+  - for N170, MMN and N2pc: performed on all scalp EEG channels
+  - for N400 and P3: performed on non-ICA corrected VEOG channel
+  - for LRP and ERN: performed on ICA-corrected HEOG channel
+
+11. Identify segments with eye blinks during stimulus presentatoin window using parameters from "AR_Parameters_for_MW_Blinks_%s.xlsx"
+  - not for these components: MMN, LRP, ERN
+  - for N170, N2pc and P3: performed on non-ICA corrected VEOG channel
+  - for N400: performed on non-ICA corrected HEOG channel
+
+12. Identify segments with horizontal eye movements during stimulus presentation window using parameters from "AR_Parameters_for_SL_HEOG_Stim_Pres_%s.xlsx"
+  - not for these components: MMN, LRP, ERN
+  - for N170 and N2pc: performed on non-ICA corrected HEOG channel
+  - for N400 and P2: performed on non-ICA corrected HEOG channel
+  
+13. Identify segments with uncorrected horizontal eye movements using parameters from "AR_Parameters_for_SL_HEOG_%s.xlsx"
+  - for N170, MMN, N2pc, LRP and ERN: performed on ICA-corrected HEOG channel
+  - for N400 and P3: performed on non-ICA corrected HEOG channel
+  
+14. Save final data set in a new folder for each component, labelled with the subject number and the suffix "%d_prepro.set".
+
+## ERP data analysis (MATLAB)
+
+### Overview for analysis steps in MATLAB
+- **Script name:** `Permutations_and_analysis.m`
+- **Purpose:** 
+1. Compute univariate t-tests between two conditions at all electrodes and time points, saving the squared t-statistics (t²) for further analysis.
+2. Compute multivariate MANOVA with amplitude and gradient at all electrodes and time points, saving Hotelling's T² for further analysis.
+3. Calculate the same statistics from a permutation-based null distributions of trial data (H0) for subsequent significance testing.
+- **Input:** Preprocessed ERP Core data files (`*_prepro.set`) for each participant and ERP component, generated by `Script_meta_preprocessing.m`
+- **Dependencies:** 
+  - MATLAB Version 24.2.0.2863752 (R2024b)
+  - EEGLAB Toolbox Version  2024.2.1 
+  - ERPLAB Toolbox Version 9.00
+  - `limo_ttest` function to compute t-tests using the LIMO Toolbox (https://github.com/LIMO-EEG-Toolbox/limo_tools).
+  - `diff.hotell2` function to calculate Hotelling's T² using the Highdim Toolbox (https://github.com/brian-lau/highdim).
+- **Output:** 
+  - A .mat file with all results stored in the structure "res" and saved for each subject with the file suffix "%d_results.mat" in the folder "perm_results".
+  - Permutation seeds for each subject and component as .mat file with the suffix "p%d_%s_seed.mat" in the folder "seeds".
+  - Six MATLAB figures for each participant and component, visualizing the baseline-normalized time-series of t² and Hotelling's T² for both the empirical and permutated data (only four figures for LRP and N2pc).
+  
+### Processing Steps
+
+1.  Load pre-processed ERP data files with suffix "%d_prepro.set". Exclude participants that were disregarded by the ERP CORE (i.e., subjects that were not excluded due to excessive artifacts) and reject epochs that were flagged with artifacts during previous preprocessing steps.
+
+   - N170: exclude participants 1, 5, 16
+   - MMN: exclude participant 7
+   - N2pc: exclude participants 7, 9, 10, 12, 28
+   - P3: exclude participants 6, 9, 10, 30, 35, 40
+   - N400: exclude participant 40
+   - LRP: exclude participants 6, 30, 40
+   - ERN: exclude participants 5, 6, 30, 40
+
+2. Apply a 20 Hz low-pass Butterworth filter of the 8th order on all channels.
+
+3. Select only scalp electrodes for analysis (channels 1:28).
+
+4. Separate data into two conditions based on event bins. Event label "bini" 1 identifies experimental trials and "bini" 2 identifies control trials. EXCEPTION is the LRP and N2pc component, which are analyzed over contra-lateral electrode sites and data needs to be separated accordingly. Only one electrode from each hemisphere was used for analysis of these components. The required event bin labels for all component are specified below:
+
+
+N170: parent bins = [1 2]; diff bin = [5]; 
+bin 1 Faces, Correct
+bin 2 Cars, Correct
+bin 3 Scrambled Faces, Correct
+bin 4 Scrambled Cars, Correct
+b5 = (b1 - b2) label Faces minus Cars
+
+MMN: parent bins = [1 2]; diff bin = [3]; 
+Bin 1	Deviants
+Bin 2	Standards, Preceded by a Standard
+b3 = (b1 - b2) label Deviants minus Standards   
+
+N2pc: parent bins = [4 5]; diff bin = [1];
+b1 Left Target, All Target Colors
+b4 Right Target, Blue
+b5 Left Target, Pink
+nb1 = ((b1@RH+b2@LH)/2 - (b1@LH+b2@RH)/2) label Contra minus Ipsi, All  
+LH = 9; RH = 26; this corresponds to PO7/PO8
+
+P3: parent bins = [1 2]; diff bin = [3]; 
+b1 Rare, Correct
+b2 Frequent, Correct
+b3 = (b1 - b2) label Rare minus Frequent
+
+N400: parent bins = [1 2]; diff bin = [3];
+b1 All Unrelated, Correct
+b2 All Related, Correct
+b3 = (b1 - b2) label Unrelated Word Pairs minus Related Word Pairs
+
+LRP: parent bins = [4 5]; diff bin = [1];
+b1 Left Response, All Trials
+b4 Left Response, Incompatible Flankers
+b5 Right Response, Compatible Flankers
+nb1 = (((b1@RH+b2@LH)/2) - ((b1@LH+b2@RH)/2)) label Contra minus Ipsi, All 
+LH = 5; RH = 22; this corresponds to C3/C4
+
+ERN: parent bins = [1 2]; diff bin = [7];
+b1 Incorrect, All Trials
+b2 Correct, All Trials
+b7 = (b1 - b2) label Incorrect minus Correct, All Trials
+
+5. Obtain average ERP parent waveform, average difference waveform using the difference subtractions indicated above.
+
+6. Perform univariate paired t-tests at each electrode and time point using `limo_ttest`. Calculate squared t-values (t²) and identify maximum t² across electrodes per time point (no max variables for N2pc and LRP).
+
+7. Perform multivariate Hotelling's T² MANOVA using gradient and amplitude at each electrode and time point using `diff.hotell2`. Identify maximum Hotelling's T² across electrodes per time point (not for N2pc and LRP). Additionally compute Hotelling's T² MANOVA using a subset of six electrodes neighboring the central electrode of interest as defined by the ERP CORE publication. Save also the t² and HT² of the predefined electrode of interest from the empirical and permutated data.
+
+ERP CORE defined electrode of interest for each component:
+
+| Component | Electrode of Interest |
+|-----------|-----------------------|
+|N170       | chan 26               |
+|MMN        | chan 20               |
+|N2pc       | chan 9                |
+|P3         | chan 13               |
+|N400       | chan 14               |
+|LRP        | chan 5                |
+|ERN        | chan 20               |
+
+8. Generate random permutations of trial labels between conditions and compute t-tests and MANOVA statistics for each permutation as described in steps 4 and 5.
+
+9. Apply baseline normalization to all test statistics by subtracting the median calculated from the baseline period.
+
+| Component | Baseline period (ms) |
+|-----------|-----------------------|
+| N170      | -200 to 0             |
+| MMN       | -200 to 0             |
+| N2pc      | -200 to 0             |
+| N400      | -200 to 0             |
+| P3        | -200 to 0             |
+| LRP       | -800 to 600           |
+| ERN       | -400 to -200          |
+
+10. Plot the time-series of empirical permutated statistics. Six figures are saved per participant and component (only 4 for the N2pc and LRP, which were analysed only at the electrode of interest)
+- Univariate t² at the electrode of interest and max t² at each time point.
+- Multivariate HT² MANOVA on amplitude and gradient at the electrode of interest and max HT² at each time point.
+- Empirical t² from electrode of interest superimposed over 1000 permutations of t².
+- Empirical HT² from electrode of interest superimposed over 1000 permutations of HT².
+- Empirical max t² superimposed over 1000 permutations of t².
+- Empirical max HT² superimposed over 1000 permutations of HT².
+
+### Output variables saved in `res` structure
+```{r res_variables, echo=FALSE}
+path <- file.path("E:/Preprocessed_ERP_Core/P3/perm_results/1_results.mat")
+res <- readMat(path)$res
+field_names <- unlist(attr(res, "dimnames")[[1]])
+names(res) <- field_names
+summary(res)
+```
+
+
+## Plot Individual Difference Waveforms
+### Overview 
+- **Script name:** `Plot_diff_waves.m`
+- **Purpose:** Plots the calculated ERP difference waveforms with CIs and effect sizes to check their compatibility with the results from the ERP CORE publication
+- **Input:** 
+  - ERP files from Script9_GrandAverage_ERPs.m in folder `ERP_Core_grand_averages`
+  - Results from `Permutations_and_analysis.m` in folder `perm_results`
+- **Dependencies:** 
+  - EEGLAB Toolbox Version  2024.2.1
+  - ERPLAB Toolbox Version 9.00
+- **Output:**
+  - Two MATLAB figures for each component in folder `matlab_diff_wave_figures`
+  - `Effect_size_results.xlsx`
+  - `_group_av_CIs.xlsx`for each component
+### Supporting Information: Windows for measuring effect size
+
+| ERP component | Measurement window |
+|---------------|--------------------|
+| N170          | [110, 150]         |                     
+| MMN           | [125, 225]         |
+| N2pc          | [200, 275]         |  
+| N400          | [300, 500]         |                    
+| P3            | [300, 600]         |                      
+| LRP           | [-100, 0]          |                     
+| ERN           | [0, 100]           |
+
+
+## Support Vector Machine Analysis
+### Overview
+- **Script name:** `SVM_decoding.m`
+- **Purpose:** Run SVM multivariate analysis at each time point using all electrodes
+- **Input:** 
+  - Pre-processed EEG Data in component sub-folders `data` (from Preprocessing_ERP_Core.m)
+- **Dependencies:** 
+  - EEGLAB version 2024.2.1
+  - ERPLAB version 9.00
+- **Output:**
+  - Bin-epoched single trial (BEST) structure files `prep.best`
+  - SVM results structure files `SVM.mvpa`
+  - MATLAB plots of classification accuracy for each participant
+
+## Onset Estimation using different methods (R)
+### Overview 
+- **Script name:** `onset_estimation.R`
+- **Purpose:** Obtain onset estimates and plot results
+  - from Change Point Detection
+  - from cluster-sum permutation testing (CSPT)
+  - from maximum statistics (MAX) correction
+- **Input:** 
+  - Results in folder `perm_results` (from Permutations_and_analysis.m)
+  - Results in folder `SVM_results` (from SVM_decoding.m)
+- **Dependencies:** 
+  - R version 4.3.2
+  - `R.matlab`
+  - `changepoint`
+  - `tidyverse`
+  - `writexl`
+  - `ggplot2`
+  - `matrixStats`
+- **Output:**
+  - Onset estimates of all participant are saved in one file per component `r_onsets_all_methods.xlsx`
+  - Average waveforms and results from permutation testing is saved as .xlsx file for each participant in the folder r_averages
+  - Plots of ERP onset from all esitmation methods are saved in in `r_figures`
+  
+## Plotting FWER Corrected Statistical Significance (R)
+### Overview
+- **File name:** `plotting_univariate_significance.R`
+- **Purpose:** Plot statistically significant time points from 
+  - uncorrected univariate significance
+  - Cluster-sum permutation testing (CSPT)
+  - Maximum statistics (MAX) correction
+- **Input:**
+  - Results in folder `perm_results` (from Permutations_and_analysis.m)
+  - Onset estimates, each EPR component one file `r_onsets_all_methods.xlsx` (created in onset_estimation.R)
+  - input: results from statistical results from each participants in folder `r_averages` (created in onset_estimation.R)
+- **Dependencies:** 
+  - Quarto version 1.5.0
+  R version 4.3.2
+  - `R.matlab`
+  - `tidyverse`
+  - `readxl`
+  - `ggplot2`
+- **Output:** Figures for all participants in `r_figures_univ_significance`
+
+# Notebooks
+
+## Evaluating Onset Estimation Results (Quarto)
+### Overview
+- **File name:** `r_onset_results.qmd`
+- **Purpose:** Create plots and result tables for a project report
+- **Input:**
+  - onset estimates in `r_onsets_all_methods.xlsx`
+  - average waveforms and CIs in folder `r_averages`
+- **Dependencies:** 
+  - Quarto version 1.5.0
+  - `readxl`
+  - `tibble`
+  - `tidyverse`
+  - `ggplot2`
+  - `patchwork`
+  - `cowplot`
+  - `viridis`
+  - `png`
+  - `grid`
+  - `magick`
+  - `dplyr`
+  - `R.matlab`
+  - `knitr`
+- **Output:** Renders as docx file
+
+
+## Create a summary figure of all Components for individual Participants
+### Overview 
+- **Script name:** `subject_summary_figure.R`
+- **Purpose:** Plot onset results using the virtual max electrode and the electrode of interest
+- **Input:**
+- **Dependencies:** 
+  - R version 4.3.2
+  - `ggplot2` for visualization
+- **Output:** One figure for each participant in folder `r_indv_summary_figures`
+
+
+
+
+
