@@ -1,0 +1,209 @@
+---
+title: "Univariate Significance of the P3b Component"
+format:
+  html:
+    toc: true
+    self-contained: true
+    toc-depth: 3
+    df-print: kable
+execute:
+  warning: false
+editor: visual
+---
+
+```{r}
+#| label: setup
+#| echo: false 
+
+library(readxl)
+library(tidyverse)
+
+# Specify main directory containing files of all ERP components
+main_dir <- "E:/Preprocessed_ERP_Core/All_components_files"
+
+# Specify ERP Component of Interest
+comp <- "P3"
+SUB <- as.character(1:40)
+exclude <- c("6", "9", "10", "30", "35", "40")
+
+
+# Specify directory dependencies
+  comp_dir <- file.path(main_dir, comp)
+  results_dir <- file.path(comp_dir, "perm_results")
+  averages_dir <- file.path(comp_dir, "r_averages")
+  thresh_fig_dir <- file.path(comp_dir, 'r_thresh_figures') 
+  
+# Load onset estimates
+  onsets_path <- file.path(comp_dir, "r_onsets_all_methods.xlsx")
+  df_all_onsets <- read_excel(onsets_path)
+
+```
+
+#### Overview
+
+The purpose of this document is to compare different univariate methods of testing for significant differences using P3b component from the ERP CORE repository. The following methods are compared in a few selected participants:
+
+-   Uncorrected univariate significance at all time points using independent t-tests, both at max t² and spec t²
+
+-   Maximum statistics correction for multiple comparisons on t² ((Groppe et al., 2011a, 2011b; Holmes et al., 1996; Ince et al., 2017; Nichols & Holmes, 2002) (Rousselet, 2024), both at maxt² and spec t²
+
+-   Cluster-sum permutation testing on t²
+
+It operates on output of the MATLAB script Permutations_and_analysis.m, as well as the R scripts script onset_estimation.R and draws on figures created in plotting_univariate_significance.R
+
+## Mass-Univariate T-Tests
+
+![](images/1_fig_ttest_max.png){width="4in"}
+
+When using one electrode of interest only we see  clear effect in the absolute t-values and also in the significant time points (although this is uncorrected significance of course, alpha was set to 0.05.
+
+I was also to plot the absolute t-values and p-values from the virtual max electrode by saving an index of the max t² electrode and selecting the respective t-values and p-values. Now we see that almost every time-point is significant;
+
+![](images/1_fig_ttest_spec.png){width="4in"}
+
+Analyzing one selected electrode of interest might have advantages (effect size?) for analyzing ERP effects that are well established. When there is no prior knowledge about which electrode to analyze to obtain a given effect, the max t² approach might be a better option to reduces researches degrees of freedom and sources of bias.
+
+For comparison here also results from max correction.
+
+## MAX Correction
+
+Max threshold was extracted as the 95th pct of cluster-sum statistics obtained in 2000 permutations.
+
+![](images/1_fig_max_t2_MAXthresh.png){width="4in"}
+
+In this specific component and participant there seem to be more max corrected significant time points when using the electrode of interest, compared to max t²;
+
+![](images/1_fig_spec_t2_MAXthresh-01.png){width="4in"}
+
+But this is not always the case. In some components the MAX correction works better using the max t² electrode (max correction onset estimation on the the electrode of interest yields more NA's in those components)
+
+## Cluster-Sum Permutation Testing
+
+![](images/1_fig_cluster_sum-01.png){width="4in"}
+
+This case example also shows that MAX correction is possibly too conservative, cluster-sum is less conservative!
+
+## Individual Participants without Significant Effects
+
+Some participants show a significant effect only in cluster-sum permutation testing. Participant 15 and 20 offer examples for this case:
+
+Participant 15:
+
+![](images/15_fig_ttest_max-01.png){width="4in"}
+
+This participant shows, that performing univariate t-tests at the maximum t² electrode can produce significant results at all time points, including during the baseline period and when there is no clear effect.
+
+![](images/15_fig_ttest_spec.png){width="4in"}
+
+Uncorrected t-tests on the specified electrode of interest still identify a number of significant time points during the baseline period and at time points outside of the window of interest for the P3 component.
+
+![](images/15_fig_max_t2_MAXthresh.png){width="4in"}
+
+The maximum statistics correction identifies not one single significant time point across all electrodes in this participant.
+
+![](images/15_fig_spec_t2_MAXthresh.png){width="4in"}
+
+The same holds true for the specified electrode of interest, electrode "Pz". The P3b effect is visibly quite weak in this participant. Nonetheless, cluster-sum permutation testing identifies a significant cluster at the onset of \~214.85 ms.
+
+![](images/15_fig_cluster_sum.png){width="4in"}
+
+A similar picture can be seen in participant 20:
+
+![](images/20_fig_ttest_max.png){width="3in"} ![](images/20_fig_ttest_spec.png){width="3in"}
+
+![](images/20_fig_max_t2_MAXthresh-02.png){width="3in"} ![](images/20_fig_spec_t2_MAXthresh.png){width="3in"}
+
+![](images/20_fig_cluster_sum.png){width="3in"}
+
+Finally, there is also participants where the cluster-sum permutation testing does not identify any significant differences. This is not the case in the P3b component data set, but occurs often in other components such as the MMN component of participant 23:
+
+![](images/23_fig_ttest_spec.png){width="3in"} ![](images/23_fig_spec_t2_MAXthresh-01.png){width="3in"}
+
+Uncorrected t-test show an effect that is not significant after applying MAX correction (above) and cluster-sum permutation testing (below).
+
+![](images/23_fig_cluster_sum.png){width="3in"}
+
+## Statistical Significance in all Seven ERP Components
+
+```{r}
+#| label: tbl-counting_na
+#| echo: false 
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP', 'ERN') 
+excludeMap <- list(
+  N170  = c("1", "5", "16"),
+  MMN   = c("7"),
+  N2pc  = c("7", "9", "10", "12", "28"),
+  P3    = c("6", "9", "10", "30", "35", "40"),
+  N400  = c("40"),
+  LRP   = c("6", "30", "40"),
+  ERN   = c("5", "6", "30", "40"))
+
+df_all_onsets <- setNames(vector("list", length(components)), components)
+target_vars <- c("cluster_sum","spec_t2_MAX", "maxt2_MAX","spec_HT2_MAX", "maxHT2_MAX")
+df_count_NAs <- tibble(Method = target_vars)
+df_count_sign <- tibble(Method = target_vars)
+
+# Load Onset Data for all components
+for (comp in components) {
+  
+  path <- file.path(main_dir, comp, "r_onsets_all_methods.xlsx")
+  df <- read_excel(path)
+   
+  # Filter out rows with participant that ERP CORE excluded from analysis
+  exclude <- excludeMap[[comp]]
+  df <- df[!df$participant %in% exclude, ]
+  df_all_onsets[[comp]] <- df
+  
+  na_counts <- df %>%
+    select(any_of(target_vars)) %>%
+    summarise(across(everything(), ~sum(is.na(.)))) %>%
+    pivot_longer(cols = everything(), names_to = "Method", values_to = comp)
+  
+  df_count_NAs <- left_join(df_count_NAs, na_counts, by = "Method")
+  
+sign_counts <- df %>%
+  select(any_of(target_vars)) %>%
+  summarise(across(everything(), ~sum(!is.na(.)))) %>%
+  pivot_longer(cols = everything(), names_to = "Method", values_to = comp)
+
+df_count_sign <- left_join(df_count_sign, sign_counts, by = "Method")
+
+}
+
+method_labels <- c(
+  cluster_sum = "Cluster-Sum Permutation Testing",
+  spec_t2_MAX = "MAX Correction on single electrode t²",
+  maxt2_MAX = "MAX Correction on max t² electrode",
+  spec_HT2_MAX = "MAX Correction on single electrode HT²",
+  maxHT2_MAX = "MAX Correction on max HT² electrode"
+)
+
+df_count_NAs$Method <- method_labels[df_count_NAs$Method]
+df_count_sign$Method <- method_labels[df_count_sign$Method]
+
+df_count_NAs
+
+```
+
+Note:
+
+-   Prior to the calculation of the number of NA's, the list of participants who were excluded from all analyses in accordance with the ERP CORE analysis procedure was removed from the results tables.
+
+-   The N2pc and LRP components effects are obtained through a double subtraction of brain activity from electrododes ipsi- and contralateral to the stimulus or behavioral reaction. MAX Correction was implemented in these electrodes using only one selected electrode of interest from each hemisphere and for this reason there are no results for MAX Correction on the maximum t² electrode.
+
+-   The MMN and ERN component show a high number of NA's in all methods, but the situation is even more drastic for the MAX Correction approaches. Using this method, only very few participants show a significant MMN or ERN effect.
+
+-   MAX Correction applied to Hotelling's T² appears to yield more conservative results than MAX Correction applied to t² values.
+
+Below is the full overview of how many participants showed a significant effect in each ERP Component using the methods discussed above:
+
+```{r}
+#| label: tbl-counting_sign
+#| echo: false 
+df_count_sign
+```
+
+Conclusions drawn:
+
+The statistical significance of a given ERP effect must be established at the individual subject level and using a method that controls for multiple comparisons. The Maximum Statistics Correction was found to be a considerably more conservative method than the cluster-sum permutation testing. Given the well-established nature of the effects of the seven components from the ERP CORE repository in the relevant literature, statistical significance in cluster-sum permutation testing was selected as the most appropriate option for confirming the presence of ERP effects in individual participants.

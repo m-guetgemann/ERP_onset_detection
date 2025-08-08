@@ -1,1 +1,1309 @@
+---
+title: "Estimating ERP onsets using Change Point Detection"
+format:
+  docx:
+    toc: true
+    self-contained: true
+    toc-depth: 3
+    df-print: kable
+execute:
+  warning: false
+  message: false
+  echo: false
+editor: source
+---
+
+### Overview
+
+This document operates on output of the script onset_estimation.R.
+
+The following tables and plots are presented with the aim of evaluating the central tendency and distribution of estimates from different onset estimation methods in all seven ERP components of the open access ERP CORE repository.
+
+```{r}
+#| label: setup
+
+library(readxl)
+library(tibble)
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+library(viridis)
+library(png)
+library(grid)
+library(magick)
+library(dplyr)
+library(R.matlab)
+library(viridis) # color palette adapted for color blindness
+library(knitr)
+
+# Specify main directory containing files and results of all ERP components
+main_dir <- "E:/Preprocessed_ERP_Core/All_components_files"
+
+# Specify ERP Components of Interest
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP', 'ERN') 
+excludeMap <- list(
+  N170  = c("1", "5", "16"),
+  MMN   = c("7"),
+  N2pc  = c("7", "9", "10", "12", "28"),
+  P3    = c("6", "9", "10", "30", "35", "40"),
+  N400  = c("40"),
+  LRP   = c("6", "30", "40"),
+  ERN   = c("5", "6", "30", "40"))
+
+
+subjects <- as.character(1:40)
+
+
+# Specify ERP Components of Interest
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP', 'ERN') 
+excludeMap <- list(
+  N170  = c("1", "5", "16"),
+  MMN   = c("7"),
+  N2pc  = c("7", "9", "10", "12", "28"),
+  P3    = c("6", "9", "10", "30", "35", "40"),
+  N400  = c("40"),
+  LRP   = c("6", "30", "40"),
+  ERN   = c("5", "6", "30", "40"))
+
+
+subjects <- as.character(1:40)
+
+# Load Onset Data for all components
+df_all_onsets <- setNames(vector("list", length(components)), components)
+df_sign_onsets <- setNames(vector("list", length(components)), components)
+for (comp in components) {
+  
+  path <- file.path(main_dir, comp, "r_onsets_all_methods.xlsx")
+  df <- read_excel(path)
+  
+  # Filter out rows with participant that ERP CORE excluded from analysis
+  exclude <- excludeMap[[comp]]
+  df <- df[!df$participant %in% exclude, ]
+  df_all_onsets[[comp]] <- df
+  
+  df_sign_onsets[[comp]] <- df %>% filter(!is.na(cluster_sum))
+}
+  
+# Reshape onset data tables to long format 
+df_onsets_long <- lapply(df_all_onsets, function(df) {
+  df %>%
+    pivot_longer(
+      cols = -participant,
+      names_to = "method",
+      values_to = "onset"
+    )
+})
+
+df_sign_onsets_long <- lapply(df_sign_onsets, function(df) {
+  df %>%
+    pivot_longer(
+      cols = -participant,
+      names_to = "method",
+      values_to = "onset"
+    )
+})
+  
+# Calculate summary statistics for each method
+all_stats <- lapply(df_onsets_long, function(df){
+  df %>%
+    group_by(method) %>%
+    summarise(
+      mean_onset = mean(onset, na.rm = TRUE),
+      sd_onset = sd(onset, na.rm = TRUE),
+      median_onset = median(onset, na.rm = TRUE),
+      q25 = unname(quantile(onset, 0.25, na.rm = TRUE)),
+      q75 = unname(quantile(onset, 0.75, na.rm = TRUE)),
+      iqr_onset = IQR(onset, na.rm = TRUE),
+      min_onset = min(onset, na.rm = TRUE),
+      max_onset = max(onset, na.rm = TRUE),
+      range_onset = max_onset - min_onset,
+      n = n(),
+      na_count = sum(is.na(onset)),
+      .groups = "drop")})
+
+sign_stats <- lapply(df_sign_onsets_long, function(df){
+  df %>%
+    group_by(method) %>%
+    summarise(
+      Mean = mean(onset, na.rm = TRUE),
+      SD = sd(onset, na.rm = TRUE),
+      Median = median(onset, na.rm = TRUE),
+      Q25 = unname(quantile(onset, 0.25, na.rm = TRUE)),
+      Q75 = unname(quantile(onset, 0.75, na.rm = TRUE)),
+      IQR = IQR(onset, na.rm = TRUE),
+      Min = min(onset, na.rm = TRUE),
+      Max = max(onset, na.rm = TRUE),
+      Range = Max - Min,
+      N = n(),
+      NAs = sum(is.na(onset)),
+      .groups = "drop"
+    )
+})
+
+# Initialize tibble with onset estimates from ERP CORE publication
+erp_core_onsets <- tribble(
+  ~component, ~measurement_window, ~onset_latency, ~onset_STD,
+  "N170",     "110 - 150",            95.76,          29.05,
+  "MMN",      "125 - 225",            146.94,         30.33,
+  "N2pc",     "200 - 275",            213.63,         30.85,
+  "N400",     "300 - 500",            284.86,         44.92,
+  "P3",       "300 - 600",            327.44,         61.98,
+  "LRP",      "-100 - 0",             -96.50,         19.85,
+  "ERN",      "0 - 100",              2.50,           27.53
+)
+```
+
+## 1. Replicating ERP Core Waveform and Effect Sizes
+
+This plot replicates a figure from the ERP CORE publication, displaying the group average parent and difference waveforms of all ERP components. Amplitude is plottet for the ERP Core specified electrodes of interest.
+
+```{r}
+#| label: fig-summary_waveforms
+#| fig-width: 7
+#| fig-height: 14
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP', 'ERN')
+p_summary_averages <- list()
+colors <- viridis(5)
+
+for (c in seq_along(components)) {
+  # c = 3
+  comp <- components[c]
+  
+  # Get data with average waveforms for each component
+  file_path <- file.path(main_dir, comp, paste0(comp, '_group_av_CIs.xlsx'))
+  df <- read_excel(file_path)
+  
+# plot group-level averages
+p_parent <- ggplot(df, aes(x = Xf)) +
+  geom_ribbon(aes(ymin = c1_ci_low, ymax = c1_ci_upp), fill = viridis(5)[4], alpha = 0.2) +
+  geom_ribbon(aes(ymin = c2_ci_low, ymax = c2_ci_upp), fill = viridis(5)[2], alpha = 0.2) +
+  geom_line(aes(y = c1_av, color = "Condition 1"), size = 1) +
+  geom_line(aes(y = c2_av, color = "Condition 2"), size = 1) +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+  scale_color_manual(values = c("Condition 1" = viridis(5)[4],
+                                "Condition 2" = viridis(5)[2])) +
+  labs(x = "Time (ms)", y = "Amplitude (µV)", color = "", title = comp) +
+  theme_light() +
+  theme(legend.position = "none")
+
+p_diff <- ggplot(df, aes(x = Xf)) +
+  geom_ribbon(aes(ymin = diff_ci_low, ymax = diff_ci_upp), fill = viridis(5)[3], alpha = 0.2) +
+  geom_line(aes(y = diff_av), color = viridis(5)[3], size = 1) +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+  labs(x = "Time (ms)", y = "Amplitude (µV)", title = "") +
+  theme_light()
+
+# Store plots
+p_summary_averages[[c]] <- plot_grid(p_parent, p_diff, ncol = 2, rel_widths = c(1, 1))
+
+}
+
+# Combine all plots
+plot_summary_averages <- wrap_plots(plotlist = p_summary_averages, ncol = 1)
+
+# Save the figure
+ggsave("waveforms_summary_fig.png", plot = plot_summary_averages, width = 7, height = 14, dpi = 300)
+
+
+plot_summary_averages
+```
+
+The following table displays a replication of the effect size results from the ERP Core pubication.
+
+```{r}
+#| label: tbl-effect_sizes
+#| tbl-cap: Replication of Effect Sizes from the ERP CORE Publication
+#| 
+# ERP CORE effect size values (Table 3 of the article)
+erp_core_mean_amp <- c(-3.37, -1.86, -1.14, -7.61, 6.29, -2.40, -9.26)
+erp_core_std <- c(2.71, 1.22, 1.15, 3.27, 3.39, 0.94, 5.90)
+erp_core_mean_std <- paste0(erp_core_mean_amp, " (", erp_core_std, ")")
+erp_core_cohens_dz <- c(1.24, 1.52, 1.00, 2.33, 1.86, 2.56, 1.57)
+
+# Load replication of effect size measurements
+effect_sizes_df <- read_excel("E:/Preprocessed_ERP_Core/Effect_size_results.xlsx")
+mean_values <- numeric(length(components))
+std_values <- numeric(length(components))
+cohens_dz <- numeric(length(components))
+
+# Calculate Cohen's dz of effect sizes for all components
+for (i in seq_along(components)) {
+  comp_data <- effect_sizes_df[[i]]  
+  mean_values[i] <- mean(comp_data, na.rm = TRUE)
+  std_values[i] <- sd(comp_data, na.rm = TRUE)
+  cohens_dz[i] <- abs(mean_values[i] / std_values[i])
+}
+mean_std_values <- paste0(round(mean_values, 2), " (", round(std_values, 2), ")")
+
+
+effect_sizes_tbl <- tibble(
+  component = components,
+  mean_std_values = mean_std_values,
+  cohens_dz = round(cohens_dz,2),
+  erp_core_mean_std = erp_core_mean_std,
+  erp_core_cohens_dz = erp_core_cohens_dz
+)
+effect_sizes_tbl
+
+```
+
+Let's get a full summary plot displaying the mean CPD onset estimate for all ERP components on one page, to compare them to the ERP CORE
+
+-   The lighter dashed line shows the onset latency reported in the ERP Core publication
+
+-   The dark line shows the mean onset estimated from CPD on t2 of the electrode of interest
+
+```{r}
+#| label: fig-summary_onsets_spec_t2_cpd
+#| fig.width: 7
+#| fig.height: 14
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP', 'ERN')
+p_summary_comp <- list()
+cols <- viridis(5)
+
+for (c in seq_along(components)) {
+  comp <- components[c]
+  df_long <- df_sign_onsets_long[[comp]]
+
+  # ERP CORE reported latency
+  latency <- erp_core_onsets %>%
+    filter(component == comp) %>%
+    pull(onset_latency)
+
+  # CPD on t²
+  df_t2 <- df_long[df_long$method == "spec_t2_cpd", ]
+  mean_onset_t2 <- mean(df_t2$onset, na.rm = TRUE)
+  mean_label_t2 <- paste0(" | onset ", round(mean_onset_t2, 1), " ms")
+
+  # CPD on HT²
+  df_HT2 <- df_long[df_long$method == "spec_HT2_cpd", ]
+  mean_onset_HT2 <- mean(df_HT2$onset, na.rm = TRUE)
+  mean_label_HT2 <- paste0(" | onset ", round(mean_onset_HT2, 1), " ms")
+
+  # Plot for t²
+  p_t2 <- ggplot(df_t2, aes(x = onset, y = method)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.4, width = 0.3) +
+    geom_vline(xintercept = mean_onset_t2, color = cols[2], linewidth = 1) +
+    geom_vline(xintercept = latency, color = cols[4], linewidth = 1) +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    geom_jitter(width = 0.2, alpha = 0.25) +
+    labs(
+      title = paste0(" ", comp, " | t²", mean_label_t2),
+      x = "Onset (ms)", y = NULL
+    ) +
+    theme_light() +
+    theme(axis.text.y = element_blank())
+
+  # Plot for HT²
+  p_HT2 <- ggplot(df_HT2, aes(x = onset, y = method)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.4, width = 0.3) +
+    geom_vline(xintercept = mean_onset_HT2, color = cols[2], linewidth = 1) +
+    geom_vline(xintercept = latency, color = cols[4], linewidth = 1) +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    geom_jitter(width = 0.2, alpha = 0.25) +
+    labs(
+      title = paste0(" ", comp, " | HT²", mean_label_HT2),
+      x = "Onset (ms)", y = NULL
+    ) +
+    theme_light() +
+    theme(axis.text.y = element_blank())
+
+  p_summary_comp[[c]] <- plot_grid(p_t2, p_HT2, ncol = 2)
+}
+
+plot_summary_comp <- wrap_plots(plotlist = p_summary_comp, ncol = 1)
+
+plot_summary_comp
+
+```
+
+## 2. Quantifying the Onset of ERP Components
+
+The tables created in this section display central tendency (median and mean) and variability (standard deviation) of all onset estimates, from all methods and across all components.
+
+### Median CPD Onset for all Methods
+
+```{r}
+#| label: tbl-median_onsets_all_methods
+#| tbl-cap: Median Onsets Estimates of all ERP Components from all Methods
+
+median_onsets_cpd <- bind_rows(sign_stats, .id = "component") %>%
+  select(component, method, Median) %>%
+  pivot_wider(names_from = component, values_from = Median) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)))
+
+median_onsets_cpd
+```
+
+### Mean CPD Onset for Methods
+
+```{r}
+#| label: tbl-mean_onsets_all_methods
+#| tbl-cap: Mean Onsets Estimates of all ERP Components from all Methods
+
+mean_onsets_cpd <- bind_rows(sign_stats, .id = "component") %>%
+  select(component, method, Mean) %>%
+  pivot_wider(names_from = component, values_from = Mean) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)))
+
+mean_onsets_cpd
+```
+
+### SD of CPD Onset for all Methods
+
+```{r}
+#| label: tbl-sd_onsets_all_methods
+#| tbl-cap: SD of Onsets Estimates of all ERP Components from all Methods
+
+sd_onsets_cpd <- bind_rows(sign_stats, .id = "component") %>%
+  select(component, method, SD) %>%
+  pivot_wider(names_from = component, values_from = SD) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)))
+
+sd_onsets_cpd
+```
+
+### ERP CORE Estimates of Onset 
+
+Individual onset latency was estimated using the 50% Peak Amplitude Latency technique.
+
+For comparison the onset estimates and measurement window from the original ERP CORE publication:
+
+```{r}
+#| label: tbl-erp_core_onsets
+#| tbl-cap: Onset Estimates from the ERP CORE (50% Peak Amplitude Latency)
+
+onset_table <- erp_core_onsets %>%
+  mutate(`Mean (SD)` = sprintf("%.2f (%.2f)", onset_latency, onset_STD)) %>%
+  select(component, `Mean (SD)`, `Measurement Window (ms)` = measurement_window) %>%
+  pivot_longer(cols = c(`Mean (SD)`, `Measurement Window (ms)`), names_to = "ERP CORE Onset Estimation") %>%
+  pivot_wider(names_from = component, values_from = value)
+
+onset_table
+```
+
+## 3. Tables with Descriptive Statistics
+
+This section creates tables with descriptive statistics for each method of onset estimation.
+Tables also indicate how many participants exhibited statistically significant effects using different methods that control for FWER.
+
+### Onsets from Cluster-Sum Permutation Testing
+
+```{r}
+#| label: tbl-onsets_summary_cluster_sum
+#| tbl-cap: Onset of Cluster-Sum Permutation Testing
+#| echo: false
+#| warning: false
+#| message: false
+
+summary_table_cs <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "cluster_sum") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>%
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_cs
+
+```
+
+### Onsets from Maximum Statistics Correction Thresholding
+
+```{r}
+#| label: tbl-onsets_summary_spec_t2_MAX
+#| tbl-cap: Onset of MAX corrected spec t2
+#| echo: false
+#| warning: false
+#| message: false
+
+summary_table_spect2_MAX <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "spec_t2_MAX") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_spect2_MAX
+```
+
+```{r}
+#| label: tbl-onsets_summary_max_t2_MAX
+#| tbl-cap: Onset of MAX corrected max t2
+#| echo: false
+#| warning: false
+#| message: false
+
+summary_table_maxt2_MAX <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "maxt2_MAX") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_maxt2_MAX
+```
+
+The NA count for MAX corrections is very high. I calculate the 95th percentile threshold from the max t² permutation distribution and find the earliest time point where the empirical max t² exceeds this threshold. These high NA counts shown in the table above may indicate that the permutation distribution of max t² sets too high of a threshold for identifying significant points within the t² time-series.
+
+### CPD on t² from electrode of interest
+
+The following table displays descriptive statistics of Change Point Detection applied to t² time-series from only one selected electrode of interest (the electrode used for amplitude and latency measurements in the original ERP Core publication).
+
+```{r}
+#| label: tbl-onsets_summary_spec_t2_cpd
+#| tbl-cap: Onsets Estimates from CPD on t² at the electrode of interest
+
+
+summary_table_1 <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "spec_t2_cpd") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_1
+```
+
+The following table displays descriptive statistics of Change Point Detection applied to the max t² time-series.
+
+```{r}
+#| label: tbl-onsets_summary_maxt2_cpd
+#| tbl-cap: Onsets Estimates from CPD on max t²
+
+summary_table_2 <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "maxt2_cpd") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_2
+```
+
+### CPD on HT² from electrode of interest
+
+The following table displays descriptive statistics of the first change point detected in Hotelling's T² from only one specified electrode of interest.
+
+```{r}
+#| label: tbl-onsets_summary_spec_HT2_cpd
+#| tbl-cap: Onsets estimates of all ERP Components using using CPD on HT² at the electrode of interest
+
+summary_table_3 <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "spec_HT2_cpd") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_3
+```
+
+### CPD on HT² 
+
+The following table displays descriptive statistics of Change Point Detection applied to the max HT² time-series
+
+```{r}
+#| label: tbl-onsets_summary_maxHT2_cpd
+#| tbl-cap: Onsets Estimates of all ERP Components using max HT² CPD
+#| echo: false
+#| warning: false
+#| message: false
+
+summary_table_maxHT2 <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "maxHT2_cpd") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_maxHT2
+```
+
+### CPD on SVM Classification Accuracy Scores
+
+These next tables show the results from applying change point detection to SVM classification accuracy scores.
+
+```{r}
+#| label: tbl-onsets_summary_svm_cpd
+#| tbl-cap: Onsets estimates using CPD on SVM Classification Accuracy Scores
+
+summary_table_4 <- map_dfr(components, function(comp) {
+  sign_stats[[comp]] %>%
+    filter(method == "svm_cpd") %>%
+    select(Mean, SD, Median, IQR, Min, Max, N) %>%
+    mutate(component = comp)
+}) %>%
+  select(component, everything()) %>% # 'component' as first column
+  mutate(across(c(Mean, SD, Median, IQR, Min, Max, N), round, 1))
+
+summary_table_4
+```
+
+## 4. Plots to Show the Distribution of Onset Estimates
+
+### CPD on t² at the electrode of interest
+
+This plot illustrates the distribution of onsets obtained from CPD on t² at the electrode of interest.
+
+```{r}
+#| label: fig-spec_t2_cpd
+#| fig-cap: Distribution of Onsets using CPD on spec t²
+#| fig-width: 4
+#| fig-height: 3
+
+plotting_spect2_cpd <- list() # Initialize empty list to store ERP component plots
+
+for (comp in components) {
+  
+ # Get summary stats for the specified method
+stats <- sign_stats[[comp]] %>%
+  filter(method == "spec_t2_cpd") %>%
+  select(Mean, Median)
+
+# select data for component
+df_long <- df_sign_onsets_long[[comp]]
+
+  # Plots
+   boxPlot <- ggplot(
+    df_long[df_long$method == "spec_t2_cpd", ],
+    aes(x = method, y = onset)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.4, fill = "lightblue") +
+    stat_summary(fun = mean, geom = "point", color = "blue3", shape = 4, size = 6) +
+    geom_vline(xintercept = 0, color = "black", linewidth = 0.3) +
+    geom_jitter(width = 0.2, alpha = 0.25) +
+    labs(x = "CPD on spec t²", y = "onset (ms)",
+         title = paste0("Onset of ", comp,
+                        " | Mean: ", 
+                        round(stats$Mean, 1), 
+                        " ms | Median: ", 
+                        round(stats$Median, 1), " ms")) +
+    theme_light() + scale_fill_brewer(palette = "Set2")
+  
+  histogram <- ggplot(
+    df_long[df_long$method == "spec_t2_cpd", ], 
+    aes(x = onset)) +
+    geom_histogram(binwidth = 10, alpha = 0.4, color = "blue3") +
+    labs(x = "onset (ms)") +
+    theme_light() + scale_fill_brewer(palette = "Set2")
+  
+  plotting_spect2_cpd[[comp]] <- boxPlot + histogram
+  
+}
+plotting_spect2_cpd[["N170"]]
+plotting_spect2_cpd[["MMN"]]
+plotting_spect2_cpd[["N2pc"]]
+plotting_spect2_cpd[["N400"]]
+plotting_spect2_cpd[["P3"]]
+plotting_spect2_cpd[["LRP"]]
+plotting_spect2_cpd[["ERN"]]
+```
+
+The following plots show the distribution of onsets estimated using CPD on max t² for the P3 component.
+
+### CPD on max t²
+
+```{r}
+#| label: fig-maxt2_cpd
+#| fig-cap: Distribution of Onsets using CPD on max t²
+#| fig-width: 4
+#| fig-height: 3
+
+plotting_maxt2_cpd <- list() # Initialize empty list to store ERP component plots
+
+for (comp in components) {
+  
+ # Get summary stats for the specified method
+stats <- sign_stats[[comp]] %>%
+  filter(method == "maxt2_cpd") %>%
+  select(Mean, Median)
+
+# select data for component
+df_long <- df_sign_onsets_long[[comp]]
+
+  # Plots
+   boxPlot <- ggplot(
+    df_long[df_long$method == "maxt2_cpd", ],
+    aes(x = method, y = onset)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.4, fill = "lightblue") +
+    stat_summary(fun = mean, geom = "point", color = "blue3", shape = 4, size = 6) +
+    geom_vline(xintercept = 0, color = "black", linewidth = 0.3) +
+    geom_jitter(width = 0.2, alpha = 0.25) +
+    labs(x = "CPD on t²", y = "onset (ms)",
+         title = paste0("Onset of ", comp,
+                        " | Mean: ", 
+                        round(stats$Mean, 1), 
+                        " ms | Median: ", 
+                        round(stats$Median, 1), " ms")) +
+    theme_light() + scale_fill_brewer(palette = "Set2")
+  
+  histogram <- ggplot(
+    df_long[df_long$method == "maxt2_cpd", ], 
+    aes(x = onset)) +
+    geom_histogram(binwidth = 10, alpha = 0.4, color = "blue3") +
+    labs(x = "onset (ms)") +
+    theme_light() + scale_fill_brewer(palette = "Set2")
+  
+  plotting_maxt2_cpd[[comp]] <- boxPlot + histogram
+  
+}
+
+plotting_maxt2_cpd[["P3"]]
+```
+
+The following plots show the distribution of onsets estimated using CPD on max Hotelling's T² for the P3 component.
+
+### CPD on max HTt²
+
+```{r}
+#| label: fig-maxHT2_cpd
+#| fig-cap: Distribution of Onsets using STD CPD on max HT²
+#| fig-width: 5
+#| fig-height: 4
+
+plotting_maxHT2_cpd <- list() # Initialize empty list to store ERP component plots
+
+for (comp in components) {
+  
+ # Get summary stats for the specified method
+  stats <- sign_stats[[comp]] %>%
+  filter(method == "maxHT2_cpd") %>%
+  select(Mean, Median)
+
+# select data for component
+df_long <- df_sign_onsets_long[[comp]]
+  
+ # Plots
+  
+   boxPlot <- ggplot(
+    df_long[df_long$method == "maxHT2_cpd", ],
+    aes(x = method, y = onset)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.4, fill = "lightblue") +
+    stat_summary(fun = mean, geom = "point", color = "blue3", shape = 4, size = 4) +
+    geom_hline(yintercept = 0, size = 0.3) +
+    geom_jitter(width = 0.2, alpha = 0.25) +
+    labs(x = "CPD on HT²", y = "onset (ms)",
+         title = paste0("Onset of ", comp,
+                        " | Mean: ",  
+                        round(stats$Mean, 1), 
+                        " ms | Median: ", 
+                        round(stats$Median, 1), " ms")) +
+    theme_light() + scale_fill_brewer(palette = "Set2")
+  
+  histogram <- ggplot(
+    df_long[df_long$method == "maxHT2_cpd", ], 
+    aes(x = onset)) +
+    geom_histogram(binwidth = 10, alpha = 0.4, color = "blue3") +
+    labs(x = "onset (ms)") +
+    theme_light() + scale_fill_brewer(palette = "Set2")
+  
+  plotting_maxHT2_cpd[[comp]] <- boxPlot + histogram 
+}
+
+plotting_maxHT2_cpd[["P3"]]
+```
+
+## 5. Plots to Compare Methods of Onset Estimation
+
+The following plots have been compiled to compare ERP onset obtained from different methods of onset estimation. 
+
+### Onsets from Cluster-Sum Permutation Testing and CPD on t² at electrode of interest
+```{r}
+#| label: fig-compare_spec_t2_cluster
+#| fig-cap: Comparing CPD on t² and cluster-sum permutation testing at the electrode of interest
+#| fig-width: 8
+#| fig-height: 6
+#| dpi: 300
+
+library(viridis)
+library(patchwork)
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP')  # Removed 'ERN'
+colors <- viridis(5)
+
+p_compare_spec_t2_cluster <- list()
+
+for (i in seq_along(components)) {
+  comp <- components[i]
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_spec_t2_cs = spec_t2_cpd - cluster_sum)
+
+  mean_diff   <- mean(df$diff_spec_t2_cs, na.rm = TRUE)
+  median_diff <- median(df$diff_spec_t2_cs, na.rm = TRUE)
+
+  p_compare_spec_t2_cluster[[comp]] <- ggplot(df, aes(x = diff_spec_t2_cs, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "spec t² CPD - CSPT (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_spec_t2_cluster <- wrap_plots(p_compare_spec_t2_cluster, ncol = 2) +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_spec_t2_cluster
+
+```
+
+## Onsets from Cluster-Sum Permutation Testing and CPD on t² at maximum electrode
+```{r}
+#| label: fig-compare_max_t2_cluster
+#| fig-cap: Comparing CPD on t² and cluster-sum permutation testing at the electrode of interest
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3') 
+p_compare_max_t2_cluster <- list()
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_maxt2_cs = maxt2_cpd - cluster_sum)
+
+  mean_diff   <- mean(df$diff_maxt2_cs, na.rm = TRUE)
+  median_diff <- median(df$diff_maxt2_cs, na.rm = TRUE)
+
+  p_compare_max_t2_cluster[[comp]] <- ggplot(df, 
+                                             aes(x = diff_maxt2_cs, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "max t² CPD - CSPT (ms)", 
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_max_t2_cluster <- p_compare_max_t2_cluster[["N170"]] + 
+                               p_compare_max_t2_cluster[["MMN"]] + 
+                               p_compare_max_t2_cluster[["N400"]] + 
+                               p_compare_max_t2_cluster[["P3"]] + 
+                               p_compare_max_t2_cluster[["ERN"]] +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_max_t2_cluster
+
+```
+
+### Onsets from MAX Correction and CPD on t² at electrode of interest
+```{r}
+#| label: fig-compare_spec_t2_MAX
+#| fig-cap: Comparing MAX Correction and CPD on t² at the electrode of interest
+#| fig-width: 8
+#| fig-height: 6
+#| dpi: 300
+
+library(viridis)
+library(patchwork)
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP')
+colors <- viridis(5)
+
+p_compare_spec_t2_MAX <- list()
+
+for (i in seq_along(components)) {
+  comp <- components[i]
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_spec_t2_MAX = spec_t2_cpd - spec_t2_MAX)
+
+  mean_diff   <- mean(df$diff_spec_t2_MAX, na.rm = TRUE)
+  median_diff <- median(df$diff_spec_t2_MAX, na.rm = TRUE)
+
+  p_compare_spec_t2_MAX[[comp]] <- ggplot(df, aes(x = diff_spec_t2_MAX, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "spec t² CPD - MAX (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_spec_t2_MAX <- wrap_plots(p_compare_spec_t2_MAX, ncol = 2) + 
+                           plot_annotation(tag_levels = "A")
+
+plot_compare_spec_t2_MAX
+
+```
+
+## Onsets from MAX Correction and CPD on max t² 
+```{r}
+#| label: fig-compare_max_t2_MAX
+#| fig-cap: Comparing MAX Correction and CPD on max t²
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3')
+p_compare_max_t2_MAX <- list()
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_max_t2_MAX = maxt2_cpd - maxt2_MAX)
+
+  mean_diff   <- mean(df$diff_max_t2_MAX, na.rm = TRUE)
+  median_diff <- median(df$diff_max_t2_MAX, na.rm = TRUE)
+
+  p_compare_max_t2_MAX[[comp]] <- ggplot(df, aes(x = diff_max_t2_MAX, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "max t² CPD - MAX (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_max_t2_MAX <- p_compare_max_t2_MAX[["N170"]] +
+                          p_compare_max_t2_MAX[["MMN"]] +
+                          p_compare_max_t2_MAX[["N400"]] +
+                          p_compare_max_t2_MAX[["P3"]] +
+                          plot_annotation(tag_levels = "A")
+
+plot_compare_max_t2_MAX
+
+```
+
+### Onsets of MAX Statistics thresholded max t² and electrode of interest t²
+```{r}
+#| label: fig-compare_MAX_maxt2_spect2
+#| fig-cap: Comparing MAX Correction on max t² and t² at electrode of interest
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3')
+p_compare_MAX_maxt2_spect2 <- list()
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_MAX_maxt2_spect2 = maxt2_MAX - spec_t2_MAX)
+  
+  mean_diff   <- mean(df$diff_MAX_maxt2_spect2, na.rm = TRUE)
+  median_diff <- median(df$diff_MAX_maxt2_spect2, na.rm = TRUE)
+  
+  p_compare_MAX_maxt2_spect2[[comp]] <- ggplot(df, aes(x = diff_MAX_maxt2_spect2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "MAX max t² - MAX spec t² (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_MAX_maxt2_spect2 <- p_compare_MAX_maxt2_spect2[["N170"]] +
+                               p_compare_MAX_maxt2_spect2[["MMN"]] +
+                               p_compare_MAX_maxt2_spect2[["N400"]] +
+                               p_compare_MAX_maxt2_spect2[["P3"]] +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_MAX_maxt2_spect2
+
+```
+
+### Onsets of MAX thresholded max t² vs. max HT²
+
+
+```{r}
+#| label: fig-compare_MAX_maxt2_maxHT2
+#| fig-cap: Onsets of MAX thresholded max t² vs. max HT²
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3')
+p_compare_MAX_maxt2_maxHT2 <- list()
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_MAX_t2_HT2 = maxt2_MAX - maxHT2_MAX)
+  
+  mean_diff   <- mean(df$diff_MAX_t2_HT2, na.rm = TRUE)
+  median_diff <- median(df$diff_MAX_t2_HT2, na.rm = TRUE)
+  
+  p_compare_MAX_maxt2_maxHT2[[comp]] <- ggplot(df, aes(x = diff_MAX_t2_HT2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "MAX max t² - MAX max HT² (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_MAX_maxt2_maxHT2 <- p_compare_MAX_maxt2_maxHT2[["N170"]] +
+                               p_compare_MAX_maxt2_maxHT2[["MMN"]] +
+                               p_compare_MAX_maxt2_maxHT2[["N400"]] +
+                               p_compare_MAX_maxt2_maxHT2[["P3"]] +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_MAX_maxt2_maxHT2
+
+```
+
+### CPD on max t² vs. t² from specified electrode of interest
+
+Does it make a difference whether we take the maximum electrode at each time-point or a predefined electrode (as often done) for CPD on t2 statistics?
+
+```{r}
+#| label: fig-compare_CPD_maxt2_spect2
+#| fig-cap: Comparing CPD applied to max t² and t² at electrode of interest
+#| fig_width: 8
+#| fig_height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3')
+p_compare_CPD_maxt2_spec <- list() 
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_maxt2_spec = maxt2_cpd - spec_t2_cpd)
+  
+  mean_diff   <- mean(df$diff_maxt2_spec, na.rm = TRUE)
+  median_diff <- median(df$diff_maxt2_spec, na.rm = TRUE)
+
+  p_compare_CPD_maxt2_spec[[comp]] <- ggplot(df, 
+                                             aes(x = diff_maxt2_spec, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +           
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +   # <-- added +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "max t² - spec t² (ms)", 
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_CPD_maxt2_spec <- p_compare_CPD_maxt2_spec[["N170"]] + 
+                               p_compare_CPD_maxt2_spec[["MMN"]] + 
+                               p_compare_CPD_maxt2_spec[["N400"]] + 
+                               p_compare_CPD_maxt2_spec[["P3"]] +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_maxt2_spec
+```
+
+### CPD on max HT² vs. HT² from specified electrode of interest
+
+```{r}
+#| label: fig-compare_CPD_maxHT2_specHT2
+#| fig-cap: Comparing CPD applied to max HT² and HT² at electrode of interest
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3')
+p_compare_CPD_maxHT2_spec <- list() 
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_maxHT2_spec = maxHT2_cpd - spec_HT2_cpd)
+  
+  mean_diff   <- mean(df$diff_maxHT2_spec, na.rm = TRUE)
+  median_diff <- median(df$diff_maxHT2_spec, na.rm = TRUE)
+
+  p_compare_CPD_maxHT2_spec[[comp]] <- ggplot(df, 
+                                              aes(x = diff_maxHT2_spec, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +           
+    geom_vline(xintercept = mean_diff,   color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "max HT² - spec HT² (ms)", 
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_CPD_maxHT2_spec <- p_compare_CPD_maxHT2_spec[["N170"]] + 
+                                p_compare_CPD_maxHT2_spec[["MMN"]] + 
+                                p_compare_CPD_maxHT2_spec[["N400"]] + 
+                                p_compare_CPD_maxHT2_spec[["P3"]] +
+                                plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_maxHT2_spec
+
+```
+
+### CPD on univariate t² vs. multivariate HT² at the electrode of interest
+```{r}
+#| label: fig-compare_CPD_t2_vs_HT2_spec
+#| fig-cap: Comparing CPD applied to t² and HT² at the electrode of interest
+#| fig-width: 8
+#| fig-height: 6
+#| dpi: 300
+
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP')  # ERN removed
+colors <- viridis(5)
+
+p_compare_CPD_t2_HT2_spec <- list()
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_spec_t2_HT2 = spec_t2_cpd - spec_HT2_cpd)
+
+  mean_diff   <- mean(df$diff_spec_t2_HT2, na.rm = TRUE)
+  median_diff <- median(df$diff_spec_t2_HT2, na.rm = TRUE)
+
+  p_compare_CPD_t2_HT2_spec[[comp]] <- ggplot(df, aes(x = diff_spec_t2_HT2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | median ", round(median_diff, 1), " ms | mean ",round(mean_diff, 1), " ms"),
+      x = "spec t² - spec HT² (ms)",
+      y = NULL
+    ) +
+    theme_light()
+
+}
+
+plot_compare_CPD_t2_HT2_spec <- wrap_plots(p_compare_CPD_t2_HT2_spec, ncol = 2) +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_t2_HT2_spec
+
+```
+
+
+### CPD on univariate t² vs. multivariate HT² at the maximum electrode
+```{r}
+#| label: fig-compare_CPD_maxt2_vs_maxHT2
+#| fig-cap: Comparing CPD applied to t² and HT² at the maximum electrode
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3')
+p_compare_CPD_t2_HT2_max <- list()
+colors <- viridis(5)
+
+for (comp in components) {
+  
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_maxt2_maxHT2 = maxt2_cpd - maxHT2_cpd)
+  
+  mean_diff   <- mean(df$diff_maxt2_maxHT2, na.rm = TRUE)
+  median_diff <- median(df$diff_maxt2_maxHT2, na.rm = TRUE)
+
+  p_compare_CPD_t2_HT2_max[[comp]] <- ggplot(df, 
+                                             aes(x = diff_maxt2_maxHT2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | median ", round(median_diff, 1), " ms | mean ",round(mean_diff, 1), " ms"),
+      x = "max t² - max HT² (ms)",
+      y = NULL
+    ) +
+    theme_light()          
+}
+
+plot_compare_CPD_t2_HT2_max <- wrap_plots(p_compare_CPD_t2_HT2_max, ncol = 2) +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_t2_HT2_max
+
+```
+
+### CPD on SVM vs. t² at the electrode of interest
+```{r}
+#| label: fig-compare_CPD_svm_vs_t2_spec
+#| fig-cap: Comparing CPD applied to SVM and t² at the electrode of interest
+#| fig-width: 8
+#| fig-height: 6
+#| dpi: 300
+
+library(viridis)
+library(patchwork)
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP')  # ERN removed
+colors <- viridis(5)
+
+p_compare_CPD_svm_t2_spec <- list()
+
+for (i in seq_along(components)) {
+  comp <- components[i]
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_svm_spec_t2 = svm_cpd - spec_t2_cpd)
+
+  mean_diff   <- mean(df$diff_svm_spec_t2, na.rm = TRUE)
+  median_diff <- median(df$diff_svm_spec_t2, na.rm = TRUE)
+
+  p_compare_CPD_svm_t2_spec[[comp]] <- ggplot(df, aes(x = diff_svm_spec_t2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "SVM - spec t² (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_CPD_svm_t2_spec <- wrap_plots(p_compare_CPD_svm_t2_spec, ncol = 2) +
+                              plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_svm_t2_spec
+
+```
+
+### CPD on SVM vs. multivariate HT² at the electrode of interest
+```{r}
+#| label: fig-compare_CPD_svm_vs_HT2_spec
+#| fig-cap: Comparing CPD applied to SVM and HT² at the electrode of interest
+#| fig-width: 8
+#| fig-height: 6
+#| dpi: 300
+
+library(viridis)
+library(patchwork)
+
+components <- c('N170', 'MMN', 'N2pc', 'N400', 'P3', 'LRP')  # Removed 'ERN'
+colors <- viridis(5)
+
+p_compare_CPD_svm_HT2_spec <- list()
+
+for (i in seq_along(components)) {
+  comp <- components[i]
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_svm_spec_HT2 = svm_cpd - spec_HT2_cpd)
+
+  mean_diff   <- mean(df$diff_svm_spec_HT2, na.rm = TRUE)
+  median_diff <- median(df$diff_svm_spec_HT2, na.rm = TRUE)
+
+  p_compare_CPD_svm_HT2_spec[[comp]] <- ggplot(df, aes(x = diff_svm_spec_HT2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff, color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "SVM - spec HT² (ms)",
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_CPD_svm_HT2_spec <- wrap_plots(p_compare_CPD_svm_HT2_spec, ncol = 2) +
+                               plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_svm_HT2_spec
+
+
+```
+
+### CPD on SVM vs. multivariate max HT²
+```{r}
+#| label: fig-compare_CPD_svm_vs_HT2_max
+#| fig-cap: Comparing CPD applied to SVM and max HT² 
+#| fig-width: 8
+#| fig-height: 4
+#| dpi: 300
+
+components <- c('N170', 'MMN', 'N400', 'P3') 
+p_compare_CPD_svm_HT2_max <- list()
+colors <- viridis(5)
+
+for (comp in components) {
+  df <- df_sign_onsets[[comp]] %>%
+    mutate(diff_svm_maxHT2 = svm_cpd - maxHT2_cpd)
+
+  mean_diff   <- mean(df$diff_svm_maxHT2, na.rm = TRUE)
+  median_diff <- median(df$diff_svm_maxHT2, na.rm = TRUE)
+
+  p_compare_CPD_svm_HT2_max[[comp]] <- ggplot(df, 
+                                              aes(x = diff_svm_maxHT2, y = "")) +
+    geom_jitter(height = 0.2, width = 0, alpha = 0.7, size = 1) +
+    geom_boxplot(outlier.shape = NA, height = 0.3, alpha = 0.2) +
+    geom_vline(xintercept = median_diff, color = colors[2], linewidth = 1) +
+    geom_vline(xintercept = mean_diff,   color = colors[4], linewidth = 1, linetype = "dashed") +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(
+      title = paste0(" ", comp, " | ", round(median_diff, 1), " ms"),
+      x = "SVM - max HT² (ms)", 
+      y = NULL
+    ) +
+    theme_light()
+}
+
+plot_compare_CPD_svm_HT2_max <- p_compare_CPD_svm_HT2_max[["N170"]] + 
+                                p_compare_CPD_svm_HT2_max[["MMN"]] + 
+                                p_compare_CPD_svm_HT2_max[["N400"]] + 
+                                p_compare_CPD_svm_HT2_max[["P3"]] + 
+                                p_compare_CPD_svm_HT2_max[["ERN"]] +
+                                plot_annotation(tag_levels = "A")
+
+plot_compare_CPD_svm_HT2_max
+
+```
+
+
+
+
 

@@ -1,0 +1,458 @@
+---
+title: "comparing_changepoint_methods"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: setup
+#| echo: false 
+#| warning: false
+
+library(R.matlab)
+library(changepoint)
+library(tidyverse) 
+library(writexl) 
+library(openxlsx)
+
+
+# Binary Segmentation (BS) method proposed by Auger and Lawrence (1989)
+get_BS_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "BinSeg", Q = 2, penalty = "Asymptotic", pen.value = 0.05)
+  # Q specifies maximum of Q change points in "BinSeg"
+  cps <- cpts(cp) # extract indices of CPs from object "cp" returned by cpt.meanvar()
+  return(Xf[cps[1]]) # return only the first CP
+}
+
+# Segment Neighbourhoods (SN) method proposed by Auger and Lawrence (1989)
+get_SN_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "SegNeigh", Q = 3, penalty = "Asymptotic", pen.value = 0.05)
+  # Q specifies maximum of Q segments in "SegNeigh"
+  cps <- cpts(cp)
+  return(Xf[cps[1]]) 
+}
+
+# Pruned Exact Linear Time (PELT) method 
+# R. Killick, P. Fearnhead & I. A. Eckley (2012) Optimal Detection of Changepoints With a Linear Computational Cost, Journal of the American Statistical Association, 107:500, 1590-1598, DOI: 10.1080/01621459.2012.737745()
+get_PELT_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "PELT", penalty = "Asymptotic", pen.value = 0.05)
+  # if "Asymptotic" is specified, the theoretical type I error is contained in pen.value
+  # pen.value = the theoretical type I error e.g.,0.05 when using the "Asymptotic" penalty
+  cps <- cpts(cp) 
+  return(Xf[cps[1]]) 
+}
+
+ # Pruned Exact Linear Time (PELT) allows to control manual penalty value
+get_PELT40_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "PELT", penalty = "Manual", pen.value = 40)
+  # the higher the penalty value, the greater the cost adding another change-point
+  # lower pen.value for more sensitive detection of more change-points
+  cps <- cpts(cp) 
+  return(Xf[cps[1]])}
+
+get_PELT50_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "PELT", penalty = "Manual", pen.value = 50)
+  cps <- cpts(cp) 
+  return(Xf[cps[1]])}
+
+get_PELT60_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "PELT", penalty = "Manual", pen.value = 60)
+  cps <- cpts(cp) 
+  return(Xf[cps[1]])}
+
+get_PELT70_cpts <- function(data, Xf) {
+  cp <- cpt.meanvar(data, method = "PELT", penalty = "Manual", pen.value = 70)
+  cps <- cpts(cp) 
+  return(Xf[cps[1]])}
+```
+
+### The P3
+
+```{r}
+#| echo: false 
+#| warning: false
+comp <- "P3"
+chanIdx <- 13
+SUB <- as.character(1:40)
+exclude <- c("6", "9", "10", "30", "35", "40") 
+compDIR <- file.path( comp)
+resultsDIR <- file.path(compDIR,"new_perm_results")
+cpdDIR <- file.path("cpd_algorithms")
+if (!dir.exists(cpdDIR)) {
+  dir.create(cpdDIR, recursive = TRUE, showWarnings = FALSE)
+}
+
+# Initialize result tables
+cpd_methods <- c("BS", "SN", "PELT", "PELT40", "PELT50", "PELT60", "PELT70")
+
+onset_res <- list()
+for (method in cpd_methods) {
+  onset_res[[method]] <- tibble(
+    participant = SUB,
+    t2_cpd_prestim = vector("list", length(SUB)),
+    maxt2_cpd = vector("list", length(SUB)),
+    spec_t2_cpd = vector("list", length(SUB)))}
+
+for (i in seq_along(SUB)) {
+    # i <- 11 # for testing purposes
+    sub <- SUB[i]
+    if (sub %in% exclude) {
+      cat(sprintf("Skipping subject %s for component %s\n", sub, comp))
+      next
+    }
+  filepath <- file.path(resultsDIR, paste0(sub, "_results.mat"))
+  res <- readMat(filepath)$res
+  field_names <- unlist(attr(res, "dimnames")[[1]])
+  names(res) <- field_names
+  
+  # Extract data
+  Xf <- as.numeric(res$Xf)
+  maxt2_bn <- as.numeric(res$maxt2.bn)
+  #spec_t2_bn <- res$t2.bn[chanIdx, ] # from electrode of interest
+  spec_t2_bn <- res$spec.t2.bn
+  
+  # Select Post-stimulus data
+  postStimIdx <- Xf >= 0
+  Xf_post <- Xf[postStimIdx]
+  maxt2_bn_post <- maxt2_bn[postStimIdx]
+  spec_t2_bn_post <- spec_t2_bn[postStimIdx]
+  
+ # Get onset estimates using all CPD methods
+  for (method in cpd_methods) {
+  fun_name <- paste0("get_", method, "_cpts")
+  fun <- get(fun_name)
+  
+  onset_res[[method]]$t2_cpd_prestim[[i]] <- fun(maxt2_bn, Xf)
+  onset_res[[method]]$maxt2_cpd[[i]] <- fun(maxt2_bn_post, Xf_post)
+  onset_res[[method]]$spec_t2_cpd[[i]] <- fun(spec_t2_bn_post, Xf_post)
+  } # method loop
+
+} # subject loop
+
+
+# Prepare data frames for each variable
+maxt2_df <- tibble(participant = SUB)
+spec_t2_df <- tibble(participant = SUB)
+t2_prestim_df <- tibble(participant = SUB)
+
+for (method in cpd_methods) {
+  maxt2_vals <- map(onset_res[[method]]$maxt2_cpd, ~ paste0(.x, collapse = ", "))
+  spec_t2_vals <- map(onset_res[[method]]$spec_t2_cpd, ~ paste0(.x, collapse = ", "))
+  t2_prestim_vals <- map(onset_res[[method]]$t2_cpd_prestim, ~ paste0(.x, collapse = ", "))
+  
+  maxt2_df[[method]] <- unlist(maxt2_vals)
+  spec_t2_df[[method]] <- unlist(spec_t2_vals)
+  t2_prestim_df[[method]] <- unlist(t2_prestim_vals)
+}
+
+# Save each as a separate Excel file
+write.xlsx(maxt2_df, file = file.path(cpdDIR, "P3_CPalgorithms_maxt2.xlsx"))
+write.xlsx(spec_t2_df, file = file.path(cpdDIR, "P3_CPalgorithms_spec_t2.xlsx"))
+write.xlsx(t2_prestim_df, file = file.path(cpdDIR, "P3_CPalgorithms_t2_prestim.xlsx"))
+```
+
+In this document, we want to compare different change point detection algorithms using one "nice" exemplary component, the P3 component from the ERP Core repository. We also want to compare the performance of these algorithms when applied to different variables, such as the virtual maximum t²electrode and the t²time series from only one selected electrode of interest. Finally, the need to exclude the pre-stimulus baseline period is evaluated for all these methodological variations.
+
+First looking at `t2_cpd_prestim.`
+
+```{r}
+#| label: tbl_t2_cpd_prestim
+#| echo: false 
+#| warning: false
+t2_prestim_df <- read.xlsx(file.path(cpdDIR, "P3_CPalgorithms_t2_prestim.xlsx"))
+
+long_t2_prestim <- t2_prestim_df %>%
+  mutate(participant = row_number()) %>%   
+  pivot_longer(
+    cols = -participant,
+    names_to = "method",
+    values_to = "value"
+  ) %>%
+mutate(value = as.numeric(value)) 
+
+# Summarize by method
+summary_t2_cpd_prestim <- long_t2_prestim %>%
+  group_by(method) %>%
+  summarise(
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    neg_count = sum(value < 0, na.rm = TRUE),
+    na_count = sum(is.na(value))
+  )
+summary_t2_cpd_prestim
+```
+
+-   The optimal pen.value for the PELT method seems to lie around 50, if the goal is to reduce the NA count and equally reduce the number of change points detected within the negative baseline period. The median onset for this method is 191.40 ms and coincides with the median onset estimated by the BS method
+
+-   The SN method yields a slightly later median onset at 205.07 ms.
+
+-   The BS method detect only one more change point in the baseline period in comparison to the SN method and there are no differences in the NA count.
+
+Now looking at `maxt2_cpd`
+
+```{r}
+#| label: tbl_maxt2_cpd
+#| echo: false 
+#| warning: false
+maxt2_df <- read.xlsx(file.path(cpdDIR, "P3_CPalgorithms_maxt2.xlsx"))
+
+long_maxt2 <- maxt2_df %>%
+  mutate(participant = row_number()) %>%   
+  pivot_longer(
+    cols = -participant,
+    names_to = "method",
+    values_to = "value"
+  ) %>%
+mutate(value = as.numeric(value)) 
+
+# Summarize by method
+summary_maxt2_cpd <- long_maxt2 %>%
+  group_by(method) %>%
+  summarise(
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    na_count = sum(is.na(value))
+  )
+summary_maxt2_cpd
+```
+
+-   Again, there's no differences between the discussed methods with regard to the NA count.
+
+-   The BS method reports earlier group onsets (mean 248.85 ms, median 248.04 ms) than the SN method (mean 258.84 ms, median 263.67 ms) but the min and max identified onsets are the same.
+
+Finally looking at `spec_t2_cpd`
+
+```{r}
+#| label: tbl_spec_t2_cpd
+#| echo: false 
+#| warning: false
+spec_t2_df <- read.xlsx(file.path(cpdDIR, "P3_CPalgorithms_spec_t2.xlsx"))
+
+long_spec_t2 <- spec_t2_df %>%
+  mutate(participant = row_number()) %>%   
+  pivot_longer(
+    cols = -participant,
+    names_to = "method",
+    values_to = "value"
+  ) %>%
+mutate(value = as.numeric(value)) 
+
+# Summarize by method
+summary_spec_t2_cpd <- long_spec_t2 %>%
+  group_by(method) %>%
+  summarise(
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    na_count = sum(is.na(value))
+  )
+summary_spec_t2_cpd
+```
+
+-   When comparing change point algorithms that were applied to just one selected electrode of interest, the group results of all algorithms seem to diverge less. The median estimate from the BS method (291.01 ms) is closer to that of the SN method (294.92 ms).
+
+-   It is also evident, that the group estimates obtained from the virtual max t²electrode indicate an earlier onset of the effect than those obtained from one specified electrode of interest. The median estimate from the max t²BS method (248.04 ms) is earlier than spec t²BS (291.01). The median estimate from max t²SN (263.67 ms) is also earlier than the estimate from spec t²SN (
+
+### The N170
+
+Let's also check a second data set, the N170 component from the ERP Core repository.
+
+```{r}
+#| echo: false 
+#| warning: false
+comp <- "N170"
+exclude <- c("1", "5", "16") 
+chanIdx <- 26
+
+compDIR <- file.path( comp)
+resultsDIR <- file.path(compDIR,"new_perm_results")
+SUB <- as.character(1:40)
+cpdDIR <- file.path("cpd_algorithms")
+if (!dir.exists(cpdDIR)) {
+  dir.create(cpdDIR, recursive = TRUE, showWarnings = FALSE)
+}
+
+# Initialize result tables
+cpd_methods <- c("BS", "SN", "PELT", "PELT40", "PELT50", "PELT60", "PELT70")
+
+onset_res <- list()
+for (method in cpd_methods) {
+  onset_res[[method]] <- tibble(
+    participant = SUB,
+    t2_cpd_prestim = vector("list", length(SUB)),
+    maxt2_cpd = vector("list", length(SUB)),
+    spec_t2_cpd = vector("list", length(SUB)))}
+
+for (i in seq_along(SUB)) {
+    # i <- 11 # for testing purposes
+    sub <- SUB[i]
+    if (sub %in% exclude) {
+      cat(sprintf("Skipping subject %s for component %s\n", sub, comp))
+      next
+    }
+  filepath <- file.path(resultsDIR, paste0(sub, "_results.mat"))
+  res <- readMat(filepath)$res
+  field_names <- unlist(attr(res, "dimnames")[[1]])
+  names(res) <- field_names
+  
+  # Extract data
+  Xf <- as.numeric(res$Xf)
+  maxt2_bn <- as.numeric(res$maxt2.bn)
+  #spec_t2_bn <- res$t2.bn[chanIdx, ] # from electrode of interest
+  spec_t2_bn <- res$spec.t2.bn
+  
+  # Select Post-stimulus data
+  postStimIdx <- Xf >= 0
+  Xf_post <- Xf[postStimIdx]
+  maxt2_bn_post <- maxt2_bn[postStimIdx]
+  spec_t2_bn_post <- spec_t2_bn[postStimIdx]
+  
+ # Get onset estimates using all CPD methods
+  for (method in cpd_methods) {
+  fun_name <- paste0("get_", method, "_cpts")
+  fun <- get(fun_name)
+  
+  onset_res[[method]]$t2_cpd_prestim[[i]] <- fun(maxt2_bn, Xf)
+  onset_res[[method]]$maxt2_cpd[[i]] <- fun(maxt2_bn_post, Xf_post)
+  onset_res[[method]]$spec_t2_cpd[[i]] <- fun(spec_t2_bn_post, Xf_post)
+  } # method loop
+
+} # subject loop
+
+
+# Prepare data frames for each variable
+maxt2_df <- tibble(participant = SUB)
+spec_t2_df <- tibble(participant = SUB)
+t2_prestim_df <- tibble(participant = SUB)
+
+for (method in cpd_methods) {
+  maxt2_vals <- map(onset_res[[method]]$maxt2_cpd, ~ paste0(.x, collapse = ", "))
+  spec_t2_vals <- map(onset_res[[method]]$spec_t2_cpd, ~ paste0(.x, collapse = ", "))
+  t2_prestim_vals <- map(onset_res[[method]]$t2_cpd_prestim, ~ paste0(.x, collapse = ", "))
+  
+  maxt2_df[[method]] <- unlist(maxt2_vals)
+  spec_t2_df[[method]] <- unlist(spec_t2_vals)
+  t2_prestim_df[[method]] <- unlist(t2_prestim_vals)
+}
+
+# Save each as a separate Excel file
+write.xlsx(maxt2_df, file = file.path(cpd_DIR, "N170_CPalgorithms_maxt2.xlsx"))
+write.xlsx(spec_t2_df, file = file.path(cpd_DIR, "N170_CPalgorithms_spec_t2.xlsx"))
+write.xlsx(t2_prestim_df, file = file.path(cpd_DIR, "N170_CPalgorithms_t2_prestim.xlsx"))
+```
+
+Now let's look at some summary tables for the N170 component. We will use this data to compare different change point detection methods.
+
+First looking at `t2_cpd_prestim.`
+
+```{r}
+#| label: tbl_t2_cpd_prestim
+#| echo: false 
+#| warning: false
+t2_prestim_df <- read.xlsx(file.path(cpdDIR, "N170_CPalgorithms_t2_prestim.xlsx"))
+
+long_t2_prestim <- t2_prestim_df %>%
+  mutate(participant = row_number()) %>%   
+  pivot_longer(
+    cols = -participant,
+    names_to = "method",
+    values_to = "value"
+  ) %>%
+mutate(value = as.numeric(value)) 
+
+# Summarize by method
+summary_t2_cpd_prestim <- long_t2_prestim %>%
+  group_by(method) %>%
+  summarise(
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    neg_count = sum(value < 0, na.rm = TRUE),
+    na_count = sum(is.na(value))
+  )
+summary_t2_cpd_prestim
+```
+
+-   The optimal pen.value parameter for PELT seems lie around 50, if the goal is to reduce NA's and change points identified within the negative baseline period. The median onset for the PELT50 method is 238.28 ms
+
+-   Both the BS and the SN method perform very similar in terms of NA count, the BS method identifies one more onset within the negative baseline period.
+
+-   Comparing the median onset from BS (246.09 ms) and from SN (261.71) it is evident that the BS method is closer to the PELT50 method and yields an earlier group onset estimate.
+
+Now looking at `maxt2_cpd`
+
+```{r}
+#| label: tbl_maxt2_cpd
+#| echo: false 
+#| warning: false
+maxt2_df <- read.xlsx(file.path(cpdDIR, "N170_CPalgorithms_maxt2.xlsx"))
+
+long_maxt2 <- maxt2_df %>%
+  mutate(participant = row_number()) %>%   
+  pivot_longer(
+    cols = -participant,
+    names_to = "method",
+    values_to = "value"
+  ) %>%
+mutate(value = as.numeric(value)) 
+
+# Summarize by method
+summary_maxt2_cpd <- long_maxt2 %>%
+  group_by(method) %>%
+  summarise(
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    na_count = sum(is.na(value))
+  )
+summary_maxt2_cpd
+```
+
+-   When excluding the negative baseline period, all methods discussed above yield the same NA count, the same minimum onset, and very similar median onsets, with PELT50 and SN both indicating 105.46 ms.
+
+Finally looking at `spec_t2_cpd`
+
+```{r}
+#| label: tbl_spec_t2_cpd
+#| echo: false 
+#| warning: false
+spec_t2_df <- read.xlsx(file.path(cpdDIR, "N170_CPalgorithms_spec_t2.xlsx"))
+
+long_spec_t2 <- spec_t2_df %>%
+  mutate(participant = row_number()) %>%   
+  pivot_longer(
+    cols = -participant,
+    names_to = "method",
+    values_to = "value"
+  ) %>%
+mutate(value = as.numeric(value)) 
+
+# Summarize by method
+summary_spec_t2_cpd <- long_spec_t2 %>%
+  group_by(method) %>%
+  summarise(
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    na_count = sum(is.na(value))
+  )
+summary_spec_t2_cpd
+```
+
+-   Again, all methods display the same NA count, and the median of the BS method is earlier than the median of the SN method.
+
+-   It is notable, that all median onset estimates applied to t²from one specified electrode of interest are much later than the onset estimates obtained from max t2. The BS method (median 291.01) and the SN method (median 294.92) indicate a much later onset of the effect than the median of said methods applied to max t (between \~101-105 msec for all CPD algorithms).

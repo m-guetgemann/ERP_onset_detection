@@ -1,0 +1,102 @@
+---
+title: "SVM Decoding of the P3b Component"
+format:
+  docx:
+    toc: true
+    self-contained: true
+    toc-depth: 3
+    df-print: kable
+execute:
+  warning: false
+  echo: false
+editor: visual
+---
+
+SVM decoding was performed with 100 iterations in the P3 component but with only 10 iterations for all the other components. To evaluate the impact of the number of iterations, onset estimates from 10 and 100 iterations were compared for the P3 component.
+
+```{r}
+#| label: setup
+#| echo: false 
+#| warning: false
+library(readxl)
+library(tidyverse)
+
+# Specify main directory containing files of all ERP components
+main_dir <- "E:/Preprocessed_ERP_Core/All_components_files"
+
+# Specify ERP Component of Interest
+  comp <- "P3"
+  SUB <- as.character(1:40)
+  exclude <- c("6", "9", "10", "30", "35", "40")
+
+# Specify directory dependencies
+  comp_dir <- file.path(main_dir, comp)
+  svm_dir_10 <- file.path(comp_dir, "SVM_results") 
+  svm_dir_100 <- file.path(comp_dir, "SVM_results_100iter") 
+  fig_dir_SVM10 <- file.path(comp_dir, "SVM_figures")
+  fig_dir_SVM100 <- file.path(comp_dir, "SVM_figures_100iter")
+  
+# Load onset estimates
+  SVM10_path <- file.path(comp_dir, "r_onsets_all_methods.xlsx")
+  onsets_SVM10 <- read_excel(SVM10_path)
+  
+  SVM100_path <- file.path(comp_dir, "r_onsets_all_methods_SVM100.xlsx")
+  onsets_SVM100 <- read_excel(SVM100_path)
+```
+
+## Individual Classification Accuracy Curves
+
+Participant 1 with 10 vs. 100 iterations:
+
+![](images/1_SVM_accuracy-02.png){width="3in"} ![](images/1_SVM_accuracy-03.png){width="3" height="2"} ![](images/1_SVM_accuracy-05.png){width="3in"}
+
+Participant 2 with 10 vs. 100 iterations:
+
+![](images/2_SVM_accuracy-03.png){width="3in"} ![](images/2_SVM_accuracy-02.png){width="3in"}
+
+Participant 3 with 10 vs. 100 iterations:
+
+![iter = 10](images/3_SVM_accuracy.png){width="3in"} ![iter = 100](images/3_SVM_accuracy-01.png){width="3in"}
+
+Participant 4 with 10 vs. 100 iterations:
+
+![iter = 10](images/4_SVM_accuracy-01.png){width="3in"} ![100 iter](images/4_SVM_accuracy.png){width="3in"}
+
+## Accuracy of CPD Onset estimation
+
+The results table below indicate a minimal impact on latency accuracy, with median onsets differing by only a few milliseconds. Variability in individual onset estimates also decreased slightly with fewer iterations.
+
+```{r}
+#| label: tbl-stats_SVM100
+#| tbl-cap: Descriptive Statistics of CPD on SVM with 10 and 100 iterations
+
+stats_tbl <- bind_rows(
+  onsets_SVM100 %>%
+    summarise(
+      Mean   = mean(svm_cpd, na.rm = TRUE),
+      SD     = sd(svm_cpd, na.rm = TRUE),
+      Median = median(svm_cpd, na.rm = TRUE),
+      IQR    = IQR(svm_cpd, na.rm = TRUE),
+      Max    = max(svm_cpd, na.rm = TRUE),
+      Min    = min(svm_cpd, na.rm = TRUE),
+      N      = sum(!is.na(svm_cpd))
+    ) %>%
+    mutate(Method = "SVM 100"),
+
+  onsets_SVM10 %>%
+    summarise(
+      Mean   = mean(svm_cpd, na.rm = TRUE),
+      SD     = sd(svm_cpd, na.rm = TRUE),
+      Median = median(svm_cpd, na.rm = TRUE),
+      IQR    = IQR(svm_cpd, na.rm = TRUE),
+      Max    = max(svm_cpd, na.rm = TRUE),
+      Min    = min(svm_cpd, na.rm = TRUE),
+      N      = sum(!is.na(svm_cpd))
+    ) %>%
+    mutate(Method = "SVM 10")
+) %>%
+  relocate(Method) %>%
+  mutate(across(where(is.numeric), ~round(.x, 1)))
+
+stats_tbl
+```
