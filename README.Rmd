@@ -2,7 +2,9 @@
 
 ## General Information
 
-This document gives an overview of all scripts that were used for the current project, data files were uploaded to the Open Science Framework (link below). MATLAB scripts were used to pre-process raw ERP CORE data files, to perform mass-univariate analyses and permutation testing and create figures of the results. R Scripts were used to obtain onset estimates with change point detection, to implement cluster-sum permutation testing and maximum statistics correction. Quarto Notebooks were used during intermediate steps of analysis and to showcase figures of exemplary participants. This README gives information about code for the following files:
+This document gives an overview of all scripts that were used for the current project, data files were uploaded to the Open Science Framework (link below). MATLAB scripts were used to pre-process raw ERP CORE data files, to perform mass-univariate analyses and permutation testing and create figures of the results. R Scripts were used to obtain onset estimates with change point detection, to implement cluster-sum permutation testing and maximum statistics correction. Quarto Notebooks were used during intermediate steps of analysis and to showcase figures of exemplary participants. Acknowledgements go out to my supervisor, Guillaume Rousselet, who guided and supported this project.
+
+This README gives information about code for the following files:
 - Preprocessing_ERP_Core.m
 - Permutations_and_analysis.m
 - Plot_diff_waves.m
@@ -355,6 +357,7 @@ ERP CORE defined electrode of interest for each component:
   - `R.matlab`
   - `knitr`
 - Output: Renders as docx file
+
 
 
 
