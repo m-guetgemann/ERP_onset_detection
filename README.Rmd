@@ -241,14 +241,9 @@ ERP CORE defined electrode of interest for each component:
 - Empirical max t² superimposed over 1000 permutations of t².
 - Empirical max HT² superimposed over 1000 permutations of HT².
 
-### Output variables saved in `res` structure
-```{r res_variables, echo=FALSE}
-path <- file.path("E:/Preprocessed_ERP_Core/P3/perm_results/1_results.mat")
-res <- readMat(path)$res
-field_names <- unlist(attr(res, "dimnames")[[1]])
-names(res) <- field_names
-summary(res)
-```
+### Output 
+- results for each participant are saved as .mat file in the folder perm_results of each EPR component folder
+- variables are saved in `res` structure
 
 
 ## Plot Individual Difference Waveforms
@@ -360,6 +355,7 @@ summary(res)
   - `R.matlab`
   - `knitr`
 - Output: Renders as docx file
+
 
 
 
