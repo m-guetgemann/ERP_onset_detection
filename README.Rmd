@@ -1,8 +1,15 @@
 # Change Point Detection for Individual Onset Estimation
 
-## Overview
+## General Information
 
-
+This document gives an overview of all scripts that were used for the current project, data files were uploaded to the Open Science Framework (link below). MATLAB scripts were used to pre-process raw ERP CORE data files, to perform mass-univariate analyses and permutation testing and create figures of the results. R Scripts were used to obtain onset estimates with change point detection, to implement cluster-sum permutation testing and maximum statistics correction. Quarto Notebooks were used during intermediate steps of analysis and to showcase figures of exemplary participants. This README gives information about code for the following files:
+- Preprocessing_ERP_Core.m
+- Permutations_and_analysis.m
+- Plot_diff_waves.m
+- SVM_decoding.m
+- onset_estimation.R
+- plotting_univariate_significance.R
+- r_onset_results.qmd
 
 ## Data 
 
@@ -307,7 +314,7 @@ summary(res)
   - Onset estimates of all participant are saved in one file per component `r_onsets_all_methods.xlsx`
   - Average waveforms and results from permutation testing is saved as .xlsx file for each participant in the folder r_averages
   - Plots of ERP onset from all esitmation methods are saved in in `r_figures`
-  
+
 ## Plotting FWER Corrected Statistical Significance (R)
 ### Overview
 - File name: `plotting_univariate_significance.R`
@@ -353,6 +360,7 @@ summary(res)
   - `R.matlab`
   - `knitr`
 - Output: Renders as docx file
+
 
 
 
